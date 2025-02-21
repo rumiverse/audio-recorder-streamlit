@@ -208,6 +208,9 @@ class AudioRecorder extends StreamlitComponentBase<AudioRecorderState> {
       // we clone the samples
       self.leftchannel.push(new Float32Array(left))
       self.rightchannel.push(new Float32Array(right))
+
+      self.instantBufferedData(new Float32Array(left), new Float32Array(right))
+
       self.recordingLength += bufferSize
     }
     // this.visualize();
@@ -285,6 +288,58 @@ class AudioRecorder extends StreamlitComponentBase<AudioRecorderState> {
       url: audioUrl,
       type: this.type,
     })
+  }
+
+  instantBufferedData = async (
+    leftchannel: Float32Array,
+    rightchannel: Float32Array
+  ) => {
+    // we flat the left and right channels down
+    const leftBuffer = this.mergeBuffers([leftchannel], this.recordingLength)
+    const rightBuffer = this.mergeBuffers([rightchannel], this.recordingLength)
+    // we interleave both channels together
+    let interleaved = this.interleave(leftBuffer, rightBuffer)
+
+    ///////////// WAV Encode /////////////////
+    // from http://typedarray.org/from-microphone-to-wav-with-getusermedia-and-web-audio/
+    //
+
+    // we create our wav file
+    let buffer = new ArrayBuffer(44 + interleaved.length * 2)
+    let view = new DataView(buffer)
+
+    // RIFF chunk descriptor
+    this.writeUTFBytes(view, 0, "RIFF")
+    view.setUint32(4, 44 + interleaved.length * 2, true)
+    this.writeUTFBytes(view, 8, "WAVE")
+    // FMT sub-chunk
+    this.writeUTFBytes(view, 12, "fmt ")
+    view.setUint32(16, 16, true)
+    view.setUint16(20, 1, true)
+    // stereo (2 channels)
+    view.setUint16(22, 2, true)
+    view.setUint32(24, this.sampleRate!, true)
+    view.setUint32(28, this.sampleRate! * 4, true)
+    view.setUint16(32, 4, true)
+    view.setUint16(34, 16, true)
+    // data sub-chunk
+    this.writeUTFBytes(view, 36, "data")
+    view.setUint32(40, interleaved.length * 2, true)
+
+    // write the PCM samples
+    let lng = interleaved.length
+    let index = 44
+    let volume = 1
+    for (let i = 0; i < lng; i++) {
+      view.setInt16(index, interleaved[i] * (0x7fff * volume), true)
+      index += 2
+    }
+
+    // our final binary blob
+    const blob = new Blob([view], { type: this.type })
+    var bfr = await blob.arrayBuffer()
+    var json_string = JSON.stringify(Array.from(new Uint8Array(bfr)))
+    Streamlit.setComponentValue(json_string)
   }
 
   public render = (): ReactNode => {
